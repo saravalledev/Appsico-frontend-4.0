@@ -1,5 +1,3 @@
-/* Mascaras para formulário  */
-
 function maskedCPF(value?: string | null): string {
   if (!value) return '';
 
