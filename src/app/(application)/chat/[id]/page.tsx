@@ -10,25 +10,22 @@ import {
   TypeMessage as TypeMessageSend,
   useConversationMessages,
 } from '@/libraries/hooks/useConversations';
+import masked from '@/libraries/masked';
 import { cn } from '@/libraries/utils';
 import PLACEHOLDER from '@/public/images/placeholder.jpeg';
 import WALLPAPER from '@/public/images/wallpaper-whatsapp-background.png';
+import http from '@/services/fetch';
 import { zodResolver } from '@hookform/resolvers/zod';
+import { useQuery } from '@tanstack/react-query';
 import { Loader2Icon, LucideSendHorizontal } from 'lucide-react';
 import { useSession } from 'next-auth/react';
 import { useParams } from 'next/navigation';
-import {
-  Fragment,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { Virtuoso } from 'react-virtuoso';
 import { z } from 'zod';
-
+import { revalidateSlotConversations } from '../../../../libraries/actions/revalidate';
+import type { ResponseConversation } from '../layout';
 const SchemaMessage = z.object({
   message: z.string().min(1),
 });
@@ -36,7 +33,7 @@ type TypeMessage = z.infer<typeof SchemaMessage>;
 
 const urlWs =
   process.env.NODE_ENV === 'production'
-    ? 'wss://appsico-backend-40-production.up.railway.app/chat/'
+    ? 'wss://apiappsico.segwise.com.br/chat/'
     : 'ws://localhost:3001/chat/';
 
 export default function ChatScreen() {
@@ -44,25 +41,21 @@ export default function ChatScreen() {
     id: string;
   }>();
 
-  const socket = useMemo(() => new WebSocket(urlWs + params.id), [params.id]);
+  const [connect, setConnect] = useState<boolean | null>(null);
+  const socket = useMemo(
+    () => (params.id ? new WebSocket(urlWs + params.id) : undefined),
+    [params.id]
+  );
 
   const session = useSession().data?.user.id;
   const chat = useRef<any>(null);
-
-  const [connect, setConnect] = useState<boolean | null>(null);
 
   const [timeNextPage, setTimeNextPage] = useState<boolean>(false);
 
   const messages = useConversationMessages(params.id, {
     limit: 100,
   });
-  const [messagesList, setMessageList] = useState<
-    Array<
-      TypeMessageSend & {
-        message: string;
-      }
-    >
-  >([]);
+  const [messagesList, setMessageList] = useState<Array<TypeMessageSend>>([]);
 
   const form = useForm<TypeMessage>({
     mode: 'all',
@@ -75,22 +68,42 @@ export default function ChatScreen() {
   });
   const validate = !SchemaMessage.safeParse(form.watch()).success;
 
-  const sendMessage = useCallback(() => {
-    socket.send(
-      JSON.stringify({
-        id: params.id,
-        type: 'text',
-        sender: session,
-        content: form.getValues('message'),
-      } as TypeMessageSend & {
-        sender: string;
-      })
-    );
+  const conversationEmpty = useQuery<ResponseConversation>({
+    queryKey: ['conversation', 'slot', params.id, 'header'],
+    queryFn: async ({ signal }) =>
+      await http<ResponseConversation>(
+        `/conversations/slots/${session}/${params.id}`,
+        {
+          signal,
+          method: 'GET',
+          next: {
+            tags: [`conversation.slots.${params.id}`],
+          },
+          cache: 'no-cache',
+        }
+      ),
+    enabled: !!params.id && !!session,
+  });
 
-    chat.current.scrollToIndex(messagesList.length);
+  const sendMessage = useCallback(
+    (message: string) => {
+      socket?.send(
+        JSON.stringify({
+          id: params.id,
+          type: 'text',
+          sender: session,
+          content: message,
+        } as TypeMessageSend & {
+          sender: string;
+        })
+      );
 
-    form.reset();
-  }, [socket, params.id, session, form, messagesList.length]);
+      chat.current.scrollToIndex(messagesList.length);
+
+      form.reset();
+    },
+    [socket, params.id, session, form, messagesList.length, chat]
+  );
 
   function connectUser() {
     setConnect(true);
@@ -100,21 +113,28 @@ export default function ChatScreen() {
     setConnect(false);
   }
 
-  const receiverMessage = useCallback((event: any) => {
+  function receiverMessage(event: any) {
     const data = JSON.parse(event.data) as TypeMessageSend & {
-      message: string;
       created_at: string;
     };
 
-    setMessageList((e) => [
-      ...e,
-      {
-        ...data,
-        content: data.message,
-        created_at: new Date(data.created_at),
-      },
-    ]);
-  }, []);
+    setMessageList((e) => {
+      const response = [
+        ...e,
+        {
+          ...data,
+          content: data.content,
+          created_at: new Date(data.created_at),
+        },
+      ];
+
+      chat.current.autoscrollToBottom();
+
+      revalidateSlotConversations();
+
+      return response;
+    });
+  }
 
   useEffect(() => {
     if (socket) {
@@ -122,7 +142,11 @@ export default function ChatScreen() {
       socket.addEventListener('error', disconnectUser);
       socket.addEventListener('message', receiverMessage);
     }
-  }, [socket, receiverMessage]);
+
+    return () => {
+      socket?.close();
+    };
+  }, [socket, chat]);
 
   useEffect(() => {
     //@ts-ignore
@@ -136,77 +160,100 @@ export default function ChatScreen() {
   }, []);
 
   return (
-    <div className='w-full h-full flex flex-col justify-between relative overflow-hidden'>
+    <div className='w-full h-full flex flex-col justify-between'>
       <Image
         src={WALLPAPER}
         alt='wallpaper'
         className='w-full h-full invert opacity-5 object-cover absolute z-0'
       />
-      {connect === null && (
-        <Badge className='bg-gray-400 uppercase border-b rounded-none z-10 text-center items-center justify-center'>
-          <span className='flex flex-row items-center justify-center gap-2'>
-            conectando <Loader2Icon className='w-3 h-3 animate-spin' />
-          </span>
-        </Badge>
-      )}
-      {connect === false && (
-        <Badge className='bg-red-400 uppercase border-b rounded-none z-10 text-center items-center justify-center'>
-          <span className='flex flex-row items-center justify-center gap-2'>
-            desconectado
-          </span>
-        </Badge>
-      )}
-      {!!messagesList.length && (
-        <Virtuoso
-          ref={chat}
-          atTopThreshold={500}
-          atTopStateChange={(value) => {
-            if (value && messages.hasNextPage) {
-              if (timeNextPage) {
-                messages.fetchNextPage();
-              }
-            }
-          }}
-          initialTopMostItemIndex={messagesList.length - 1}
-          totalCount={messagesList.length}
-          className='flex flex-col z-10 justify-end items-end w-full h-full mb-20'
-          data={messagesList}
-          components={{
-            Header: () => (
-              <Fragment>
-                {messages.isFetchingNextPage && (
-                  <div className='items-center justify-center self-center flex mt-4 mb-6'>
-                    <Button
-                      variant='outline'
-                      className='mx-auto z-10 items-center justify-center w-40 rounded-full border-slate-300'
-                      isLoading
-                      disabled
-                      onClick={() => messages.fetchNextPage()}
-                    >
-                      Carregando
-                    </Button>
-                  </div>
-                )}
-              </Fragment>
-            ),
-          }}
-          itemContent={(index, data) => (
-            <div
-              className={cn(
-                'mx-6',
-                index === messages.data.length - 1 && 'pb-4',
-                index === 0 && !messages.hasNextPage && 'pt-10'
+      <div className='w-full flex flex-col z-10'>
+        <div className='w-full bg-white flex flex-row px-2 items-center border-b-2 truncate h-[calc(4rem_+_0.05rem)]'>
+          <div className='mr-3'>
+            {conversationEmpty.isPending && (
+              <div className='w-10 h-10 rounded bg-slate-100' />
+            )}
+            {conversationEmpty.data?.users
+              .filter((e) => e.id !== session)
+              .map((item) => (
+                <Image
+                  key={item.id}
+                  src={item.image || PLACEHOLDER}
+                  placeholder='blur'
+                  blurDataURL={PLACEHOLDER.blurDataURL}
+                  className='w-10 h-10 rounded'
+                  width={512}
+                  height={512}
+                  alt=''
+                />
+              ))}
+          </div>
+          <div className='w-full relative truncate py-4 z-10 flex-1'>
+            <div className='text-lg font-semibold'>
+              {conversationEmpty.isPending && (
+                <div className='w-32 h-6 rounded bg-slate-100' />
               )}
-            >
-              <Message key={data.id} data={data} session={session} />
+              {conversationEmpty.data?.users
+                .filter((e) => e.id !== session)
+                .flatMap((item) => masked.name(item.name))
+                .join(', ')}
             </div>
-          )}
-        />
-      )}
+          </div>
+        </div>
+        {connect === null && (
+          <Badge className='w-full bg-gray-400 uppercase border-b rounded-none z-10 text-center items-center justify-center'>
+            <span className='flex flex-row items-center justify-center gap-2'>
+              conectando <Loader2Icon className='w-3 h-3 animate-spin' />
+            </span>
+          </Badge>
+        )}
+        {messages.isFetchingNextPage && (
+          <div className='items-center justify-center self-center flex mt-4 mb-6'>
+            <Button
+              variant='outline'
+              className='mx-auto z-10 items-center justify-center w-40 rounded-full border-slate-300'
+              isLoading
+              disabled
+              onClick={() => messages.fetchNextPage()}
+            >
+              Carregando
+            </Button>
+          </div>
+        )}
+      </div>
+      <Virtuoso
+        ref={chat}
+        atTopThreshold={500}
+        atTopStateChange={(value) => {
+          if (value && messages.hasNextPage) {
+            if (timeNextPage) {
+              messages.fetchNextPage();
+            }
+          }
+        }}
+        initialTopMostItemIndex={messagesList.length - 1}
+        totalCount={messagesList.length || 1}
+        className='flex flex-col z-0 justify-end items-end w-full h-full'
+        data={messagesList}
+        components={{
+          Footer: () => <div className='h-16' />,
+        }}
+        itemContent={(index, data) => (
+          <div
+            className={cn(
+              'mx-6',
+              index === 0 && !messages.hasNextPage && 'pt-10'
+            )}
+          >
+            <Message key={data.id} data={data} session={session} />
+          </div>
+        )}
+      />
       <Form {...form}>
         <form
-          onSubmit={form.handleSubmit((value) => {})}
-          className='py-5 px-6 z-10 flex flex-row items-center justify-between gap-4 fixed bg-white bottom-0 border-t w-[calc(100vw_-_25vw)]'
+          onSubmit={form.handleSubmit((value) => {
+            sendMessage(value.message);
+          })}
+          className='py-5 px-6 flex flex-row items-center justify-between gap-4 bg-white bottom-0 border-t-2 w-[calc(100vw_-_25vw)] z-10'
         >
           <FormField
             control={form.control}
@@ -219,12 +266,7 @@ export default function ChatScreen() {
               </FormItem>
             )}
           />
-          <Button
-            size='icon'
-            type='submit'
-            disabled={!connect || validate}
-            onClick={sendMessage}
-          >
+          <Button size='icon' type='submit' disabled={!connect || validate}>
             <LucideSendHorizontal className='w-4 h-4' />
           </Button>
         </form>
@@ -242,7 +284,7 @@ function Message({
 }) {
   if (!session) return;
 
-  if (data.sender.id !== session) {
+  if (data.sender === session) {
     return (
       <div className='flex justify-end mb-4'>
         <div className='flex flex-col items-end justify-end'>
@@ -261,26 +303,12 @@ function Message({
             }).format(data.created_at)}
           </span>
         </div>
-        <Image
-          src={data.sender.image || PLACEHOLDER}
-          className='object-cover h-8 w-8 rounded-full'
-          alt=''
-          width={52}
-          height={52}
-        />
       </div>
     );
   }
 
   return (
     <div className='flex justify-start mb-4'>
-      <Image
-        src={data.sender.image || PLACEHOLDER}
-        className='object-cover h-8 w-8 rounded-full'
-        alt=''
-        width={52}
-        height={52}
-      />
       <div className='items-start justify-start'>
         <div className='ml-2 py-3 px-4 bg-gray-400 rounded-br-3xl rounded-tr-3xl rounded-tl-xl text-white'>
           {data.content}

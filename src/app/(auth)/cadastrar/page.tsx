@@ -35,7 +35,7 @@ import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 
 export default function FormRegister(props: {
-  searchParams: { type: 'client' | 'professional' };
+  searchParams: { type: 'patient' | 'professional' };
 }) {
   const router = useRouter();
   const { toast, dismiss } = useToast();
@@ -48,7 +48,7 @@ export default function FormRegister(props: {
     reValidateMode: 'onChange',
     resolver: zodResolver(SchemaRegister),
     defaultValues: {
-      type: props.searchParams.type || 'client',
+      type: props.searchParams.type || 'patient',
       name: '',
       email: '',
       phone: '',

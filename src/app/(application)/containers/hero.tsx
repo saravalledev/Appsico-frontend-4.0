@@ -17,7 +17,6 @@ export default async function Hero() {
     await http<ResponseAnalytics>('/analytics/count/patients', {
       next: {
         revalidate: 3600,
-        tags: ['fgdsfsdfdsfds'],
       },
     }),
     await http<ResponseAnalytics>('/analytics/count/professionals', {

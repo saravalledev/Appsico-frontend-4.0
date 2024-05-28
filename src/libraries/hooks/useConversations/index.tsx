@@ -10,11 +10,7 @@ export type TypeMessage = {
   id: string;
   type: 'text' | 'image' | 'video';
   content: string;
-  sender: {
-    id: string;
-    name: string;
-    image?: string;
-  };
+  sender: string;
   created_at: Date;
 };
 
@@ -52,6 +48,9 @@ export const useConversationMessages = (
     QueryKey,
     string | undefined
   >({
+    refetchOnReconnect: false,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
     queryKey: ['conversations', id, 'messages'],
     queryFn: async ({ pageParam }) => {
       const searchParams = new URLSearchParams();
